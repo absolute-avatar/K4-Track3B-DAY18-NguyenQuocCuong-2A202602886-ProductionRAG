@@ -35,7 +35,9 @@ class CrossEncoderReranker:
             #
             # ⚠️ LƯU Ý: Dùng sentence_transformers.CrossEncoder, KHÔNG dùng FlagEmbedding.
             # FlagReranker crash với transformers>=5.0 (XLMRobertaTokenizer lỗi).
-            pass
+            from sentence_transformers import CrossEncoder
+
+            self._model = CrossEncoder(self.model_name)
         return self._model
 
     def rerank(self, query: str, documents: list[dict], top_k: int = RERANK_TOP_K) -> list[RerankResult]:
@@ -50,7 +52,23 @@ class CrossEncoderReranker:
         # 7. Return [RerankResult(text=..., original_score=doc.get("score", 0.0),
         #            rerank_score=float(score), metadata=..., rank=i)
         #            for i, (score, doc) in enumerate(scored[:top_k])]
-        return []
+        if not documents or top_k <= 0:
+            return []
+
+        model = self._load_model()
+        pairs = [(query, doc["text"]) for doc in documents]
+        scores = model.predict(pairs)
+        if isinstance(scores, (int, float)):
+            scores = [scores]
+
+        scored = sorted(zip(scores, documents), key=lambda item: float(item[0]), reverse=True)
+        return [RerankResult(
+            text=doc["text"],
+            original_score=float(doc.get("score", 0.0)),
+            rerank_score=float(score),
+            metadata=doc.get("metadata", {}),
+            rank=rank,
+        ) for rank, (score, doc) in enumerate(scored[:top_k])]
 
 
 class FlashrankReranker:
