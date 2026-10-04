@@ -9,66 +9,53 @@
 
 | Metric | Naive Baseline | Production | Δ |
 |--------|---------------|------------|---|
-| Faithfulness | 0,7667 | 0,6508 | −0,1158 |
-| Answer Relevancy | 0,7691 | 0,6786 | −0,0905 |
-| Context Precision | 0,9333 | 0,9375 | +0,0042 |
-| Context Recall | 0,9000 | 0,8167 | −0,0833 |
+| Faithfulness | 0,7667 | 0,6875 | −0,0792 |
+| Answer Relevancy | 0,7691 | 0,7592 | −0,0099 |
+| Context Precision | 0,9333 | 0,9417 | +0,0083 |
+| Context Recall | 0,9000 | 0,8500 | −0,0500 |
 
-Nguồn: `reports/naive_baseline_report.json` và `reports/ragas_report.json` của lần chạy mới; cả hai có `per_question` cho 20 câu. Production chỉ nhỉnh hơn 0,0042 ở context precision. Faithfulness và answer relevancy đều dưới mục tiêu 0,70; chưa có bằng chứng cải thiện tổng thể so với baseline. Đặc biệt, có ca trả lời sai nhưng faithfulness vẫn đạt 1,0, và ca trả lời đúng phép tính nhưng faithfulness bằng 0; vì vậy cần đối chiếu thủ công với đáp án chuẩn cùng ngữ cảnh.
+Nguồn: `reports/naive_baseline_report.json` và bản `reports/ragas_report.json` hiện tại, mỗi bản có 20 câu trong `per_question`. Báo cáo Production đã được chạy lại, còn báo cáo baseline là bản đã lưu trước đó; do đó đây là so sánh hai snapshot trên cùng test set, không phải thí nghiệm lặp nhiều lần. Production thấp hơn baseline ở 3/4 metric, nhưng chênh lệch answer relevancy chỉ khoảng 0,01. Không suy ra tỷ lệ trả lời đúng từ trung bình RAGAS: câu 55 triệu trả **đúng CEO** nhưng faithfulness bằng 0; câu nghỉ không lương 20 ngày trả **đúng người phê duyệt** nhưng bị trừ điểm vì thiếu chi tiết bảo hiểm trong ground truth.
 
-Trong `src/pipeline.py`, hệ thống lập chỉ mục child và gửi `child.text` cho LLM, nhưng chưa dùng `parent_id` để lấy lại văn bản parent. Điều này giải thích vì sao lời phủ định, đầu mục hoặc một hàng bảng có thể nằm ngoài ba đoạn được chọn dù parent chứa đầy đủ thông tin.
+Baseline dùng cùng mô hình embedding và LLM, trên 26 tài liệu ngắn tạo 57 đoạn theo paragraph. Production tạo 100 child, mỗi child tối đa 256 ký tự; `src/pipeline.py` lập chỉ mục và gửi child đã enrich cho LLM nhưng chưa truy ngược parent. Trong kho tài liệu này, cả 26 parent đều mang ID `parent_0` vì ID bắt đầu lại ở từng tài liệu. Đây là lỗi định danh cần sửa trước khi thêm parent lookup. Summary và câu hỏi giả định của M5 cũng chưa đi vào chỉ mục; chỉ câu bối cảnh được prepend vào child.
 
-## Bottom-5 Failures
+## Bottom-5 theo RAGAS
 
-### #1
-- **Question:** Bao lâu phải đổi mật khẩu một lần?
-- **Expected:** 120 ngày theo `mat_khau_v2.md` hiện hành; 90 ngày trong `mat_khau_v1.md` đã bị thay thế.
-- **Got / câu trả lời có đúng không?** “Không tìm thấy.” — sai vì tài liệu có đáp án. Điểm trung bình 0,3958; `faithfulness` và `answer_relevancy` đều bằng 0.
-- **Contexts có đáp án không?** Có. Top 1 chứa **90 ngày** của bản cũ; top 2 chứa **120 ngày** của bản mới; top 3 nói bản cũ đã bị thay thế. Phần đầu chunk không giữ đầy đủ nhãn phiên bản, khiến hai mốc dễ bị trộn.
-- **Query rewrite?** Có ích: “Theo chính sách mật khẩu v2.0 hiệu lực 01/07/2024, chu kỳ đổi mật khẩu là bao nhiêu ngày?”
-- **Error Tree:** Output sai → Context có đáp án nhưng xung đột → Query thiếu phiên bản → cần giải quyết hiệu lực trước khi sinh câu trả lời.
-- **Root cause:** Bản cũ đứng trước bản mới trong top 3; LLM chọn từ chối dù bản mới và thông báo thay thế đều đã được truy xuất. Baseline trả đúng 120 ngày.
-- **Suggested fix / module:** M1 giữ nhãn phiên bản trong mỗi child; M2 lọc bản đã hết hiệu lực; M3 ưu tiên bản hiện hành; `src/pipeline.py` yêu cầu chọn nguồn còn hiệu lực và nêu 120 ngày.
+Thứ hạng dưới đây dùng trung bình bốn metric RAGAS. Nhãn “failure” là thứ hạng điểm, cần kiểm tra đáp án thủ công trước khi quy lỗi cho hệ thống.
 
-### #2
-- **Question:** Nhân viên thử việc có được nghỉ phép năm không?
-- **Expected:** Không; nếu cần nghỉ riêng thì xin nghỉ không lương và được trưởng phòng phê duyệt, theo `thu_viec.md`.
-- **Got / câu trả lời có đúng không?** “Không tìm thấy.” — sai. Điểm trung bình 0,5000; `faithfulness` và `answer_relevancy` đều bằng 0.
-- **Contexts có đáp án không?** Chỉ một phần. Top 1 bắt đầu bằng “nghỉ phép năm**. Trường hợp cần nghỉ...”, nhưng thiếu cụm phủ định “KHÔNG được” nằm ở đầu câu gốc. Hai đoạn còn lại là chính sách phép năm 2023 cho nhân viên chính thức, không trả lời về thử việc.
-- **Query rewrite?** Không cần; câu hỏi nêu rõ đối tượng và quyền lợi.
-- **Error Tree:** Output sai → Context bị cụt mất từ phủ định → Query rõ → sửa cắt đoạn và truy xuất.
-- **Root cause:** M1 chia giữa câu quan trọng; M2/M3 chỉ đưa nửa sau vào top 3. Baseline giữ câu đầy đủ và trả lời đúng.
-- **Suggested fix / module:** M1 không cắt giữa câu, ưu tiên đoạn structure-aware cho mục quyền lợi; M2/M3 đưa chunk chứa “KHÔNG được nghỉ phép năm” vào top 3.
+### #1 — Đổi mật khẩu (0,3958; trả sai)
 
-### #3
-- **Question:** Nhân viên thử việc có được hưởng bảo hiểm sức khỏe PVI không?
-- **Expected:** Không; chỉ tham gia bảo hiểm xã hội bắt buộc, chưa được hưởng PVI, theo `thu_viec.md`.
-- **Got / câu trả lời có đúng không?** “Không tìm thấy.” — sai. Điểm trung bình 0,5000; `faithfulness` và `answer_relevancy` đều bằng 0.
-- **Contexts có đáp án không?** Có. Top 1 ghi rõ nhân viên thử việc “chưa được hưởng gói bảo hiểm sức khỏe PVI” và chỉ tham gia bảo hiểm xã hội bắt buộc. Top 2 cũng nói PVI dành cho nhân viên chính thức.
-- **Query rewrite?** Không cần; trạng thái “thử việc” và gói PVI đã rõ.
-- **Error Tree:** Output sai → Context có đáp án trực tiếp → Query rõ → lỗi ở bước sinh câu trả lời hoặc xử lý phủ định.
-- **Root cause:** LLM từ chối trả lời dù bằng chứng đứng ở top 1; không thể quy lỗi cho retrieval trong ca này.
-- **Suggested fix / module:** Trong `src/pipeline.py`, yêu cầu trả lời “Có/Không” từ câu chứa phủ định rồi giải thích ngắn; thêm kiểm thử cho câu hỏi về ngoại lệ. Baseline cũng trả “Không tìm thấy”, nên đây là lỗi chung.
+- **Expected / got:** 120 ngày theo `mat_khau_v2.md` hiện hành; Production trả “Không tìm thấy.” Baseline trả đúng 120 ngày.
+- **Bằng chứng:** Top 1 có 90 ngày bản cũ, top 2 có 120 ngày bản mới, top 3 nói bản cũ đã bị thay thế. Hai chunk chứa con số không mang nhãn phiên bản ở chính đoạn được gửi cho LLM; `context_recall=1`, nên đây không đơn thuần là thiếu kết quả truy xuất.
+- **Error Tree:** Output sai → context chứa đáp án nhưng xung đột phiên bản → câu hỏi không nêu phiên bản → phải xác định nguồn còn hiệu lực trước khi trả lời.
+- **Fix:** Gắn `source`, phiên bản, trạng thái hiệu lực cho từng child; lọc hoặc ưu tiên v2.0 trước rerank. Truy lại parent hoặc header để LLM nhìn thấy quy định 120 ngày cùng nhãn hiện hành. Có thể viết lại câu hỏi để làm rõ phiên bản, nhưng không nên bắt người dùng luôn phải nêu v2.0.
 
-### #4
-- **Question:** Nhân viên tạm ứng 15 triệu, sau 20 ngày mới thanh toán. Bị phạt bao nhiêu?
-- **Expected:** Theo `test_set.json`, quá hạn 5 ngày; phí 2%/tháng trên 15 triệu là 300.000 VNĐ/tháng, quy đổi pro-rata 5 ngày khoảng 50.000 VNĐ. `tam_ung.md` chỉ ghi 2%/tháng, chưa nói rõ quy tắc pro-rata.
-- **Got / câu trả lời có đúng không?** Trả 300.000 VNĐ là số phí **cả tháng**, không phải số phí cho 5 ngày quá hạn theo đáp án kiểm thử. Điểm trung bình 0,6179; `faithfulness` thấp nhất (0,1667).
-- **Contexts có đáp án không?** Có thời hạn 15 ngày và mức phí 2%/tháng, nhưng không có hướng dẫn rõ về cách chia phí theo ngày. Thông tin nằm ở hai chunk liên tiếp.
-- **Query rewrite?** Câu gốc rõ; có thể nêu rõ “phí cho 5 ngày quá hạn, giả sử 30 ngày/tháng” để phép tính xác định.
-- **Error Tree:** Output sai số tiền cần trả → Context có tỷ lệ nhưng thiếu quy tắc pro-rata → Query có thể làm rõ giả định → sửa dữ liệu và phép tính.
-- **Root cause:** LLM áp phí cả tháng cho 5 ngày; đáp án chuẩn cũng cần một giả định pro-rata chưa được viết trong chính sách nguồn.
-- **Suggested fix / module:** Bổ sung quy tắc pro-rata vào `tam_ung.md` và test set; trong `src/pipeline.py`, tách thời gian quá hạn rồi tính `15.000.000 × 2% × 5/30 ≈ 50.000`, nêu rõ giả định. M1 nên giữ thời hạn và phạt trong cùng parent context.
+### #2 — Phép năm của nhân viên thử việc (0,4583; trả sai)
 
-### #5
-- **Question:** Khi phát hiện malware trên máy, nhân viên có nên tự xử lý không?
-- **Expected:** Tuyệt đối không tự xử lý; báo cáo trong 1 giờ qua helpdesk@cty.vn hoặc hotline CNTT; tự xử lý là vi phạm nghiêm trọng.
-- **Got / câu trả lời có đúng không?** “Không nên tự xử lý ... chờ hướng dẫn từ đội CNTT.” Đúng ý có/không nhưng thiếu nghĩa vụ báo cáo và thời hạn; điểm trung bình 0,6667. RAGAS chấm `answer_relevancy=0` dù câu trả lời bám câu hỏi, cần kiểm tra lại metric này bằng đánh giá thủ công.
-- **Contexts có đáp án không?** Có phần “không tự ý xử lý” và hậu quả vi phạm. Top 1 bắt đầu giữa đoạn sau thông tin báo cáo trong 1 giờ, nên bằng chứng cho thời hạn/email bị mất; context recall là 0,6667.
-- **Query rewrite?** Câu gốc rõ cho phần có/không; nếu muốn câu trả lời đầy đủ, thêm “phải báo ai và trong bao lâu?”
-- **Error Tree:** Output đúng một phần → Context thiếu đầu đoạn về báo cáo → Query hỏi ngắn → kết hợp context liền kề khi trả lời.
-- **Root cause:** M1/M2/M3 không giữ phần đầu của quy định cùng top 3. Điểm answer relevancy bằng 0 không phản ánh đầy đủ chất lượng câu trả lời này.
-- **Suggested fix / module:** M1 giữ toàn bộ mục “Báo cáo sự cố” trong parent; M2/M3 trả parent hoặc đoạn kề; `src/pipeline.py` nêu cả việc không tự xử lý và kênh/thời hạn báo cáo.
+- **Expected / got:** Nhân viên thử việc **không** được nghỉ phép năm; Production trả “Không tìm thấy.” Baseline trả đúng.
+- **Bằng chứng:** Top 1 bắt đầu bằng “nghỉ phép năm**”, mất cụm “Nhân viên thử việc **KHÔNG được” ở đầu câu gốc. Hai context còn lại nói về phép năm của nhân viên chính thức theo bản 2024; `context_recall=1` của RAGAS không phát hiện mất phủ định ở đoạn quan trọng.
+- **Error Tree:** Output sai → context top 1 thiếu mệnh đề quyết định → câu hỏi rõ → lỗi cắt child và không mở rộng ngữ cảnh.
+- **Fix:** Không cắt giữa câu hoặc hàng bảng; sau khi tìm child, gửi parent/section chứa nguyên câu phủ định vào LLM. Thêm kiểm tra tự động cho câu hỏi Có/Không có phủ định.
+
+### #3 — Phí tạm ứng quá hạn (0,6584; đáp án thiếu cơ sở tính)
+
+- **Expected / got:** Test set giả sử tính phí pro-rata 5 ngày quá hạn, khoảng 50.000 VNĐ; Production trả 300.000 VNĐ, tức 2% cho cả tháng. Baseline cũng trả 300.000 VNĐ.
+- **Bằng chứng:** Top 3 có hạn thanh toán 15 ngày và phí 2%/tháng, nhưng hai quy định nằm ở các child khác nhau. `tam_ung.md` không nói phí tháng lẻ tính pro-rata, làm tròn hay thu trọn tháng.
+- **Error Tree:** Con số khác ground truth → có thời hạn và tỷ lệ nhưng thiếu quy tắc quy đổi → chưa thể chốt duy nhất mức phí 5 ngày từ tài liệu nguồn.
+- **Fix:** Trước tiên làm rõ chính sách và ground truth về tháng lẻ. Nếu chính sách xác nhận pro-rata theo 30 ngày, đáp án là `15.000.000 × 2% × 5/30 = 50.000 VNĐ`; khi đó mới kiểm tra logic tính toán của pipeline. Không tự thêm quy tắc này vào nguồn như thể đã được ban hành.
+
+### #4 — Nghỉ không lương 20 ngày (0,6959; trả đúng ý hỏi)
+
+- **Expected / got:** Cần CEO phê duyệt; Production trả đúng CEO. Ground truth còn thêm nghĩa vụ tự đóng phần bảo hiểm khi nghỉ trên 14 ngày, trong khi câu hỏi chỉ hỏi người phê duyệt.
+- **Bằng chứng:** Top 1 có nguyên quy định “16-30 ngày → CEO”; phần bảo hiểm ở đoạn sau không nằm trọn trong top 3. RAGAS cho `faithfulness=0,5`, `context_recall=0,5` dù câu trả lời chính đúng.
+- **Error Tree:** Output đúng câu hỏi → ngữ cảnh đủ cho người phê duyệt → metric phạt phần thông tin bổ sung trong ground truth.
+- **Fix:** Tách bài kiểm tra “ai phê duyệt?” và “nghỉ 20 ngày ảnh hưởng bảo hiểm thế nào?”, hoặc yêu cầu câu hỏi hỏi cả hai. Không xếp ca này là lỗi trả lời sai.
+
+### #5 — Mua thiết bị 55 triệu (0,7026; trả đúng nhưng metric bất thường)
+
+- **Expected / got:** Trên 50 triệu cần CEO; Production và baseline đều trả đúng CEO.
+- **Bằng chứng:** Top 1 hiện có nguyên hàng bảng “Trên 50.000.000 VNĐ | Tổng Giám đốc (CEO)”. Dù vậy RAGAS cho `faithfulness=0`, còn `context_precision≈1` và `context_recall=1`. Top 3 vẫn lẫn quy định Kế toán trưởng của tài liệu tạm ứng, nhưng lần này LLM không dùng nhầm.
+- **Error Tree:** Output đúng và context hỗ trợ trực tiếp → điểm faithfulness mâu thuẫn với bằng chứng → cần kiểm tra lần chấm, không quy lỗi cho truy xuất ở ca này.
+- **Fix:** Ghi nhận đúng/sai thủ công cạnh RAGAS; kiểm tra lại evaluator trên cặp answer/context này. Tiếp tục lọc nhầm tài liệu tạm ứng để giảm rủi ro ở những lần chạy sau.
 
 ## Case Study (cho presentation)
 
@@ -78,13 +65,15 @@ Trong `src/pipeline.py`, hệ thống lập chỉ mục child và gửi `child.t
 1. Output đúng? → Không: mô hình trả “Không tìm thấy”, trong khi đáp án là 120 ngày.
 2. Context đúng? → Có đáp án, nhưng top 1 là 90 ngày của bản cũ, top 2 là 120 ngày của bản mới; thông báo thay thế ở top 3.
 3. Query rewrite OK? → Câu gốc thiếu phiên bản; thêm “theo chính sách hiện hành v2.0” để loại nhập nhằng.
-4. Fix ở bước: M1 giữ metadata phiên bản theo child; M2 loại bản hết hiệu lực; M3 xếp bản hiện hành trước; `src/pipeline.py` chọn nguồn hiệu lực và nêu 120 ngày.
+4. Fix ở bước: M1 giữ metadata phiên bản và parent có ID duy nhất; M2 loại bản hết hiệu lực; M3 xếp bản hiện hành trước; `src/pipeline.py` gửi đoạn có nhãn hiệu lực và trả 120 ngày.
 
-**Nếu có thêm 1 giờ, sẽ optimize:**
-- Ưu tiên hai thử nghiệm: giữ nguyên câu phủ định khi chunk và lọc phiên bản cũ trước retrieval. Sau đó chạy lại cùng 20 câu, kiểm tra riêng #1, #2, #3 và ca mua thiết bị 55 triệu.
+**Nếu có thêm 1 giờ, sẽ thử nghiệm:**
+- Giữ nguyên câu phủ định và hàng bảng khi chunk; lọc phiên bản cũ trước retrieval. Chạy lại cùng 20 câu và ghi cả điểm RAGAS lẫn đáp án đúng/sai cho câu mật khẩu, phép năm thử việc, PVI và 55 triệu. Chạy nhiều lượt hoặc lưu đầu ra cố định để tách thay đổi hệ thống khỏi dao động của LLM/evaluator.
 
-## Ca nghiêm trọng ngoài Bottom-5 và giới hạn của RAGAS
+## Các ca ngoài Bottom-5 và giới hạn của RAGAS
 
-- **Mua thiết bị 55 triệu:** Production trả “Cần thêm phê duyệt Kế toán trưởng”, nhưng đáp án đúng là **CEO**. Top 3 không chứa hàng bảng “Trên 50.000.000 VNĐ | CEO”; lại chứa quy định Kế toán trưởng của tài liệu *tạm ứng*. RAGAS vẫn cho `faithfulness=1,0` và `context_precision≈1,0`, trong khi `context_recall=0`. Đây là lỗi retrieval và trộn nghiệp vụ; cần giữ nguyên bảng ở M1, lọc nguồn mua sắm ở M2 và kiểm tra đúng hàng ngưỡng ở M3.
-- **Lương thử việc Junior:** Production trả đúng **17 triệu VNĐ**, hai ngữ cảnh có trần Junior 20 triệu và tỷ lệ thử việc 85%, nhưng RAGAS cho `faithfulness=0`. Đây là dấu hiệu metric có thể đánh giá sai phép tính ghép hai đoạn; cần thêm kiểm tra thủ công hoặc metric số học.
-- **Senior 9 năm:** Câu trả lời nêu 18 ngày nhưng giải thích sai thành “12 + 6” và bỏ khung lương 20–35 triệu. Top 3 chỉ có tài liệu phép năm, gồm cả bản 2023; không có bảng lương. Cần truy xuất riêng hai vế và loại chính sách cũ.
+- **PVI của nhân viên thử việc:** Production hiện trả đúng “chưa được hưởng PVI”, `faithfulness=1` và `answer_relevancy≈0,992`; baseline vẫn trả “Không tìm thấy”. Đây là cải thiện rõ trong snapshot mới, không còn thuộc Bottom-5.
+- **Lương thử việc Junior:** Production trả đúng **17 triệu VNĐ**. Top 3 có trần Junior 20 triệu và tỷ lệ 85%, nhưng RAGAS cho `faithfulness=0`. Cần kiểm tra thủ công phép tính `20.000.000 × 85%` và không dùng riêng faithfulness để kết luận đáp án sai.
+- **Senior 9 năm:** Production nay giải thích đúng **15 + 3 = 18 ngày**, nhưng chưa đưa ra khung lương **20–35 triệu** vì top 3 chỉ có tài liệu phép năm, gồm cả bản cũ. Đây là câu trả lời thiếu một vế; cần truy xuất riêng hai phần của câu hỏi rồi tổng hợp.
+- **Malware:** Production trả đúng “không tự xử lý”; `answer_relevancy≈0,853`, không còn bằng 0. Câu trả lời vẫn thiếu nghĩa vụ báo cáo trong 1 giờ vì đoạn đầu quy định không có trong top 3.
+- **Laptop 30 triệu:** Production trả đúng Director và xác nhận cấu hình từ CNTT, nhưng bỏ yêu cầu **ít nhất 3 báo giá** có trong ground truth. Phần này có trong tài liệu nguồn nhưng bị tách khỏi context đầy đủ; nên kiểm tra câu trả lời nhiều điều kiện theo từng ý.
